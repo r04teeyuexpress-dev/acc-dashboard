@@ -584,6 +584,7 @@ async function connectBase() {
   try {
     setStatus('', 'กำลังเชื่อมต่อ Base…');
     const sdk = window.__mockBitable || await withTimeout(import(SDK_URL), 20000, 'โหลด Base JS SDK ไม่สำเร็จ (ตรวจอินเทอร์เน็ต)');
+    if (sdk.FieldType) Object.assign(FT, sdk.FieldType); // ใช้รหัสชนิดฟิลด์จาก SDK จริง กันค่าเปลี่ยนตามเวอร์ชัน
     const bitable = sdk.bitable;
     const tables = await withTimeout(bitable.base.getTableMetaList(), 15000, 'Base ไม่ตอบกลับ — หน้านี้ต้องเปิดเป็นส่วนขยายในไฟล์ Base เท่านั้น');
     let activeId = ''; try { activeId = (await bitable.base.getActiveTable()).id; } catch { }
