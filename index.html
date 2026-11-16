@@ -179,6 +179,7 @@ footer{font-size:12px;color:var(--muted);margin-top:20px;text-align:center}
   </div>
   <div class="actions">
     <button id="btnRefresh" class="primary" hidden>⟳ รีเฟรช</button>
+    <button id="btnExcel">⬇ ดาวน์โหลด Excel</button>
     <label class="btn" for="file">⬆ อัปโหลดไฟล์ Export</label>
     <input id="file" type="file" accept=".xlsx,.xls,.csv" hidden>
     <button id="btnSample">ข้อมูลตัวอย่าง</button>
@@ -690,6 +691,42 @@ $('#btnExpand').onclick = () => document.querySelectorAll('.day').forEach(d => d
 $('#btnCollapse').onclick = () => document.querySelectorAll('.day').forEach(d => d.open = false);
 $('#btnCopyFollow').onclick = () => copyText(followTsv());
 $('#btnCopyPeople').onclick = () => copyText(peopleTsv());
+
+/* ---------- ดาวน์โหลด Excel ---------- */
+const XCOLS = [['วันที่', r => r.date], ['ผู้รายงาน', r => r.reporter], ['รหัสลูกค้า', r => r.code], ['ชื่อร้าน', r => r.store ? r.store.name : ''], ['จังหวัด', r => r.store ? r.store.province : ''], ['สถานะร้าน', r => r.store ? r.store.status : ''], ['ประเภทการลงพื้นที่', r => r.type], ['กลุ่ม', r => CATS[r.cat].label], ['รายละเอียดการเข้าเยี่ยมลูกค้า', r => r.detail], ['หมายเหตุ', r => r.note], ['รายละเอียดการเปิด', r => r.open], ['จำนวนรูป', r => r.photos]];
+function aoa(cols, rows) { return [cols.map(c => c[0]), ...rows.map(r => cols.map(([, f]) => { const v = f(r); return v == null ? '' : v; }))]; }
+function dailyAoa() {
+  const roster = [...new Set(recs.map(r => r.reporter))].sort((a, b) => a.localeCompare(b, 'th'));
+  const byDate = new Map();
+  for (const r of view) { const k = r.date || '(ไม่มีวันที่)'; if (!byDate.has(k)) byDate.set(k, []); byDate.get(k).push(r); }
+  const out = [['วันที่', 'ผู้รายงาน', 'สถานะ', 'จำนวนรายงาน', 'เยี่ยมลูกค้า', 'เปิดลูกค้าใหม่', 'อื่นๆ', 'จำนวนรูป']];
+  for (const k of [...byDate.keys()].sort((a, b) => b.localeCompare(a))) {
+    const list = byDate.get(k);
+    for (const n of roster) {
+      const mine = list.filter(r => r.reporter === n); const s = stats(mine);
+      out.push([k, n, mine.length ? 'ส่งแล้ว' : 'ไม่ส่งรายงาน', mine.length, s.visit, s.new, s.other, s.photos]);
+    }
+  }
+  return out;
+}
+function widths(a) { const n = a[0] ? a[0].length : 0; const w = []; for (let c = 0; c < n; c++) { let m = 8; for (const row of a) { const v = String(row[c] ?? ''); if (v.length > m) m = v.length; } w.push({ wch: Math.min(50, m + 2) }); } return w; }
+function exportExcel() {
+  if (!recs.length) { toast('ยังไม่มีข้อมูลให้ดาวน์โหลด'); return; }
+  try {
+    const wb = XLSX.utils.book_new();
+    const add = (name, a) => { if (!a || a.length < 2) return; const ws = XLSX.utils.aoa_to_sheet(a); ws['!cols'] = widths(a); XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31)); };
+    add('รายงานทั้งหมด', aoa(XCOLS, view));
+    add('สรุปรายวัน', dailyAoa());
+    add('สรุปรายบุคคล', [PCOLS.map(c => c[1]), ...peopleRows().map(p => PCOLS.map(([k]) => k === 'last' ? p.last : (p[k] ?? '')))]);
+    add('รายการติดตาม', aoa(FCOLS.map(([h, f]) => [h, h === 'วันที่' ? (r => r.date) : f]), followRows()));
+    if (stores.length) add('ร้านที่ไม่ได้เข้าเยี่ยม', aoa(COV.map(([h, f]) => [h, h === 'เยี่ยมล่าสุด' ? (r => r.last || 'ไม่เคย') : f]), coverageRows()));
+    add('เปิดใหม่ยังไม่ตามต่อ', aoa(NEWC.map(([h, f]) => [h, h === 'วันที่เปิด' ? (r => r.date) : f]), newFollowRows()));
+    const d = new Date(); const stamp = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    XLSX.writeFile(wb, 'ACC-report-' + stamp + '.xlsx');
+    toast('กำลังดาวน์โหลดไฟล์ Excel');
+  } catch (err) { showAlert('<b>สร้างไฟล์ Excel ไม่สำเร็จ:</b> ' + (err.message || err) + '<br>ใช้ปุ่มคัดลอกตารางแทนได้'); }
+}
+$('#btnExcel').onclick = exportExcel;
 
 /* ---------- sources ---------- */
 function setSource(src) {
