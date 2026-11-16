@@ -385,6 +385,16 @@ function keyToDate(k) { const p = k.split('-'); return new Date(+p[0], +p[1] - 1
 function fmtDate(k, opt = {}) { if (!k) return '–'; const d = keyToDate(k); const s = d.getDate() + ' ' + TH_M[d.getMonth()] + ' ' + (d.getFullYear() + 543); return opt.weekday ? TH_D[d.getDay()] + ' ' + s : (opt.short ? d.getDate() + ' ' + TH_M[d.getMonth()] : s); }
 function todayKey() { const d = new Date(); return dateKey(d.getFullYear(), d.getMonth() + 1, d.getDate()); }
 function addDays(k, n) { const d = keyToDate(k); d.setDate(d.getDate() + n); return dateKey(d.getFullYear(), d.getMonth() + 1, d.getDate()); }
+// ช่องรหัสลูกค้าอาจมีหลายรหัสในช่องเดียว เช่น "Jt57000124 // JT57000125" และพิมพ์เล็กใหญ่ปนกัน
+// รหัสจริงมีทั้งแบบ 6 หลัก (J&T Home) และ 8 หลัก (Yoyi) จึงห้ามตัดให้สั้นลง
+function parseCodes(raw) {
+  const out = [];
+  for (const tok of String(raw || '').split(/[^A-Za-z0-9]+/)) {
+    const u = tok.toUpperCase();
+    if (/^[A-Z]{2}\d{4,10}$/.test(u) && out.indexOf(u) < 0) out.push(u);
+  }
+  return out;
+}
 function classify(type) { const t = str(type); if (!t) return 'other'; if (t.includes('เปิด')) return 'new'; if (t.includes('เยี่ยม')) return 'visit'; return 'other'; }
 function countFiles(v) { if (v == null || v === '') return 0; if (typeof v === 'number') return v; if (Array.isArray(v)) return v.length; if (typeof v === 'object') return 1; const s = String(v).trim(); if (/^\d+$/.test(s)) return +s; return s.split(/[\n,;]+/).filter(x => x.trim()).length; }
 function norm(h) { return str(h).toLowerCase().replace(/\s+/g, ''); }
@@ -428,8 +438,8 @@ function rebuild() {
     const reporter = str(r[mapping.reporter]); const dk = parseDateKey(r[mapping.date]);
     if (!reporter && !dk) continue;
     const type = str(r[mapping.type]);
-    const code = str(r[mapping.code]);
-    recs.push({ date: dk, reporter: reporter || '(ไม่ระบุชื่อ)', code, type, cat: classify(type), detail: str(r[mapping.detail]), note: str(r[mapping.note]), open: str(r[mapping.open]), photos: countFiles(r[mapping.photo1]) + countFiles(r[mapping.photo2]), store: storeBy.get(code.toUpperCase()) || null });
+    const code = str(r[mapping.code]); const codes = parseCodes(code);
+    recs.push({ date: dk, reporter: reporter || '(ไม่ระบุชื่อ)', code, codes, type, cat: classify(type), detail: str(r[mapping.detail]), note: str(r[mapping.note]), open: str(r[mapping.open]), photos: countFiles(r[mapping.photo1]) + countFiles(r[mapping.photo2]), store: codes.map(c => storeBy.get(c)).find(Boolean) || null });
   }
   recs.sort((a, b) => b.date.localeCompare(a.date) || a.reporter.localeCompare(b.reporter, 'th'));
   const reps = [...new Set(recs.map(r => r.reporter))].sort((a, b) => a.localeCompare(b, 'th'));
@@ -456,9 +466,8 @@ function daysBetween(a, b) { return Math.round((keyToDate(b) - keyToDate(a)) / 8
 function lastVisitMap() {
   const m = new Map();
   for (const r of recs) {
-    if (!r.code || !r.date) continue;
-    const k = r.code.toUpperCase(); const cur = m.get(k);
-    if (!cur || r.date > cur.date) m.set(k, { date: r.date, reporter: r.reporter, cat: r.cat });
+    if (!r.date) continue;
+    for (const k of r.codes) { const cur = m.get(k); if (!cur || r.date > cur.date) m.set(k, { date: r.date, reporter: r.reporter, cat: r.cat }); }
   }
   return m;
 }
@@ -478,12 +487,12 @@ function coverageRows() {
 }
 function newFollowRows() {
   const byCode = new Map();
-  for (const r of recs) { if (!r.code || !r.date) continue; const k = r.code.toUpperCase(); if (!byCode.has(k)) byCode.set(k, []); byCode.get(k).push(r); }
+  for (const r of recs) { if (!r.date) continue; for (const k of r.codes) { if (!byCode.has(k)) byCode.set(k, []); byCode.get(k).push(r); } }
   const today = todayKey(); const out = [];
   for (const r of recs) {
     if (r.cat !== 'new' || !r.date) continue;
-    if (!r.code) { out.push({ ...r, gap: daysBetween(r.date, today), noCode: true }); continue; }
-    const after = (byCode.get(r.code.toUpperCase()) || []).some(x => x.cat === 'visit' && x.date > r.date);
+    if (!r.codes.length) { out.push({ ...r, gap: daysBetween(r.date, today), noCode: true }); continue; }
+    const after = r.codes.some(k => (byCode.get(k) || []).some(x => x.cat === 'visit' && x.date > r.date));
     if (!after) out.push({ ...r, gap: daysBetween(r.date, today), noCode: false });
   }
   out.sort((a, b) => b.gap - a.gap);
@@ -492,14 +501,14 @@ function newFollowRows() {
 function unknownCodes() {
   if (!stores.length) return [];
   const bad = new Set();
-  for (const r of recs) if (r.code && !storeBy.has(r.code.toUpperCase())) bad.add(r.code);
+  for (const r of recs) for (const c of r.codes) if (!storeBy.has(c)) bad.add(c);
   return [...bad];
 }
 
 /* ---------- KPI ---------- */
 function stats(list) {
   const people = new Set(list.map(r => r.reporter)); const days = new Set(list.filter(r => r.date).map(r => r.date));
-  const cust = new Set(list.map(r => r.code.toLowerCase()).filter(Boolean));
+  const cust = new Set(); for (const r of list) for (const c of r.codes) cust.add(c);
   const c = { visit: 0, new: 0, other: 0 }; let photos = 0, follow = 0;
   for (const r of list) { c[r.cat]++; photos += r.photos; if (r.note || r.open) follow++; }
   return { reports: list.length, people: people.size, days: days.size, customers: cust.size, visit: c.visit, new: c.new, other: c.other, photos, follow, avg: people.size ? list.length / people.size : 0 };
@@ -519,7 +528,7 @@ function renderKpis() {
   ];
   if (stores.length) {
     const act = stores.filter(x => x.active); const seen = new Set();
-    for (const r of view) { const k = (r.code || '').toUpperCase(); const st = storeBy.get(k); if (st && st.active) seen.add(k); }
+    for (const r of view) for (const k of r.codes) { const st = storeBy.get(k); if (st && st.active) seen.add(k); }
     items.push(['ความครอบคลุมร้าน', act.length ? Math.round(100 * seen.size / act.length) + '%' : '–', `เยี่ยม ${fmtN(seen.size)} จาก ${fmtN(act.length)} ร้าน Active`, 'cov']);
   }
   for (const [l, v, sub, cls] of items) box.append(el('div', { class: 'kpi ' + cls }, el('div', { class: 'mark' }), el('div', { class: 'l' }, l), el('div', { class: 'v' }, v), el('div', { class: 's' }, sub)));
@@ -634,7 +643,7 @@ function peopleRows() {
   const rows = names.map(n => {
     const mine = view.filter(r => r.reporter === n); const s = stats(mine);
     const lastAll = recs.filter(r => r.reporter === n && r.date).reduce((a, r) => r.date > a ? r.date : a, '');
-    const ok = mine.filter(r => stores.length ? (r.code && storeBy.has(r.code.toUpperCase())) : !!r.code).length;
+    const ok = mine.filter(r => stores.length ? r.codes.some(c => storeBy.has(c)) : r.codes.length > 0).length;
     return { name: n, ...s, last: mine.reduce((a, r) => r.date > a ? r.date : a, ''), gap: lastAll ? daysBetween(lastAll, today) : null, codeok: mine.length ? Math.round(100 * ok / mine.length) : null };
   });
   const { k, dir } = peopleSort; rows.sort((a, b) => { const x = a[k] ?? -1, y = b[k] ?? -1; const c = typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'th'); return dir === 'asc' ? c : -c; });
@@ -865,7 +874,7 @@ $('#btnCopyNew').onclick = () => copyText(tsv([NEWC.map(c => c[0]), ...newFollow
 
 /* ---------- start ---------- */
 window.addEventListener('resize', () => { clearTimeout(window.__rz); window.__rz = setTimeout(renderCharts, 150); });
-window.__dash = { get recs() { return recs; }, get view() { return view; }, get mapping() { return mapping; }, get source() { return source; }, get stores() { return stores; }, get covOpt() { return covOpt; }, stats, peopleRows, followRows, coverageRows, newFollowRows, unknownCodes, lastVisitMap, daysBetween, parseDateKey, classify, autoMap };
+window.__dash = { get recs() { return recs; }, get view() { return view; }, get mapping() { return mapping; }, get source() { return source; }, get stores() { return stores; }, get covOpt() { return covOpt; }, stats, peopleRows, followRows, coverageRows, newFollowRows, unknownCodes, lastVisitMap, daysBetween, parseDateKey, parseCodes, classify, autoMap };
 render();
 connectBase();
 </script>
