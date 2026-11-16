@@ -136,6 +136,19 @@ td .cat{display:inline-block;padding:0 8px;border-radius:999px;font-size:12px;fo
 td .cat.visit{background:var(--visit)}td .cat.new{background:var(--new)}td .cat.other{background:var(--other)}
 td.wrap{min-width:180px;max-width:360px;white-space:pre-wrap}
 .empty{color:var(--muted);font-size:14px;padding:14px;text-align:center}
+.hint{font-size:12px;color:var(--muted);margin-top:6px}
+h2 select{font:inherit;font-size:13px;font-weight:500;padding:3px 8px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface);color:var(--ink)}
+h2 label{font-size:12px;color:var(--ink-2);font-weight:600;display:flex;align-items:center;gap:6px}
+td .store{display:block;color:var(--ink-2);font-size:12px}
+.st{display:inline-block;padding:0 7px;border-radius:999px;font-size:11px;font-weight:600;white-space:nowrap}
+.st.act{background:var(--ok-bg);color:#0a6e0a}
+.st.inact{background:var(--bad-bg);color:var(--bad)}
+.st.never{background:var(--bad-bg);color:var(--bad)}
+.st.old{background:var(--warn-bg);color:#7a5600}
+:root[data-theme="dark"] .st.act{color:var(--ok)}
+:root[data-theme="dark"] .st.old{color:var(--warn)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .st.act{color:var(--ok)}:root:not([data-theme="light"]) .st.old{color:var(--warn)}}
+.kpi.cov .mark{background:var(--gold)}
 /* modal */
 .modal{position:fixed;inset:0;background:rgba(10,14,28,.55);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
 .modal .box{background:var(--surface);border-radius:14px;max-width:1000px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35)}
@@ -177,6 +190,7 @@ footer{font-size:12px;color:var(--muted);margin-top:20px;text-align:center}
 <div id="setup" class="card setup" hidden>
   <label>ตาราง<select id="selTable"></select></label>
   <label>มุมมอง<select id="selView"><option value="">ทุกเรคคอร์ด</option></select></label>
+  <label>ตารางรายชื่อร้าน<select id="selStore"><option value="">ไม่ใช้</option></select></label>
   <span id="setupInfo" style="color:var(--muted)"></span>
 </div>
 
@@ -219,7 +233,22 @@ footer{font-size:12px;color:var(--muted);margin-top:20px;text-align:center}
 <div class="card">
   <h2>รายการที่ต้องติดตามต่อ <span class="cnt" id="followCnt"></span><span class="sp"></span><button class="sm" id="btnCopyFollow">⎘ คัดลอกตาราง</button></h2>
   <div class="tbl-wrap"><table id="tblFollow"></table></div>
-  <div style="font-size:12px;color:var(--muted);margin-top:6px">เงื่อนไข: แถวที่มีข้อความในช่อง "หมายเหตุ" หรือ "รายละเอียดการเปิด"</div>
+  <div class="hint">เงื่อนไข: แถวที่มีข้อความในช่อง "หมายเหตุ" หรือ "รายละเอียดการเปิด"</div>
+</div>
+
+<div class="card" id="cardCov" hidden>
+  <h2>ร้านที่ไม่ได้เข้าเยี่ยม <span class="cnt" id="covCnt"></span><span class="sp"></span>
+    <label>ไม่ได้ไปเกิน<select id="covDays"><option value="7">7 วัน</option><option value="14">14 วัน</option><option value="30" selected>30 วัน</option><option value="60">60 วัน</option><option value="90">90 วัน</option></select></label>
+    <label><input type="checkbox" id="covActive" checked style="margin:0">เฉพาะร้าน Active</label>
+    <button class="sm" id="btnCopyCov">⎘ คัดลอกตาราง</button></h2>
+  <div class="tbl-wrap"><table id="tblCov"></table></div>
+  <div class="hint" id="covNote"></div>
+</div>
+
+<div class="card" id="cardNew" hidden>
+  <h2>ลูกค้าเปิดใหม่ที่ยังไม่ได้ตามต่อ <span class="cnt" id="newCnt"></span><span class="sp"></span><button class="sm" id="btnCopyNew">⎘ คัดลอกตาราง</button></h2>
+  <div class="tbl-wrap"><table id="tblNew"></table></div>
+  <div class="hint">เงื่อนไข: แถวที่เป็นเปิดลูกค้าใหม่ และหลังจากวันนั้นยังไม่มีรายงานเยี่ยมลูกค้ารายเดิมอีกเลย · คำนวณจากรายงานทั้งหมด ไม่ขึ้นกับตัวกรองด้านบน</div>
 </div>
 
 <div class="card">
@@ -325,7 +354,10 @@ let mapping = {};
 let recs = [];            // normalized records
 let view = [];            // after filters
 let filters = { from: '', to: '', rep: '', cat: '' };
-let base = null;          // { bitable, tables, tableId, viewId }
+let base = null;          // { bitable, tables, tableId, viewId, storeTableId }
+let stores = [];          // [{code, name, province, status, active}]
+let storeBy = new Map();  // code -> store
+let covOpt = { days: 30, activeOnly: true };
 let charts = {};
 let peopleSort = { k: 'reports', dir: 'desc' };
 
@@ -395,12 +427,17 @@ function rebuild() {
     const reporter = str(r[mapping.reporter]); const dk = parseDateKey(r[mapping.date]);
     if (!reporter && !dk) continue;
     const type = str(r[mapping.type]);
-    recs.push({ date: dk, reporter: reporter || '(ไม่ระบุชื่อ)', code: str(r[mapping.code]), type, cat: classify(type), detail: str(r[mapping.detail]), note: str(r[mapping.note]), open: str(r[mapping.open]), photos: countFiles(r[mapping.photo1]) + countFiles(r[mapping.photo2]) });
+    const code = str(r[mapping.code]);
+    recs.push({ date: dk, reporter: reporter || '(ไม่ระบุชื่อ)', code, type, cat: classify(type), detail: str(r[mapping.detail]), note: str(r[mapping.note]), open: str(r[mapping.open]), photos: countFiles(r[mapping.photo1]) + countFiles(r[mapping.photo2]), store: storeBy.get(code.toUpperCase()) || null });
   }
   recs.sort((a, b) => b.date.localeCompare(a.date) || a.reporter.localeCompare(b.reporter, 'th'));
   const reps = [...new Set(recs.map(r => r.reporter))].sort((a, b) => a.localeCompare(b, 'th'));
   const sel = $('#fRep'); const cur = sel.value; sel.innerHTML = ''; sel.append(el('option', { value: '' }, 'ทุกคน'), ...reps.map(n => el('option', { value: n }, n)));
   if (reps.includes(cur)) sel.value = cur; else filters.rep = '';
+  if ($('#alert').hidden) {
+    const bad = unknownCodes();
+    if (bad.length) showAlert(`<b>มีรหัสลูกค้า ${bad.length} รหัสที่ไม่พบในรายชื่อร้าน:</b> ${bad.slice(0, 10).join(', ')}${bad.length > 10 ? ' และอื่น ๆ' : ''} — อาจพิมพ์ผิด หรือเป็นร้านใหม่ที่ยังไม่ได้เพิ่มในตารางรายชื่อร้าน`, 'info');
+  }
   render();
 }
 function applyFilters() {
@@ -408,8 +445,54 @@ function applyFilters() {
 }
 function render() {
   applyFilters();
-  renderKpis(); renderCharts(); renderDaily(); renderFollow(); renderPeople();
+  renderKpis(); renderCharts(); renderDaily(); renderFollow(); renderCoverage(); renderNewFollow(); renderPeople();
   document.querySelectorAll('.quick button').forEach(b => b.classList.toggle('on', b.dataset.q === filters._q));
+}
+
+/* ---------- ร้าน: ข้อมูลจากตารางรายชื่อร้าน ---------- */
+function daysBetween(a, b) { return Math.round((keyToDate(b) - keyToDate(a)) / 86400000); }
+// เยี่ยมล่าสุดต่อร้าน คิดจากรายงานทั้งหมด ไม่ใช่ช่วงที่กรอง
+function lastVisitMap() {
+  const m = new Map();
+  for (const r of recs) {
+    if (!r.code || !r.date) continue;
+    const k = r.code.toUpperCase(); const cur = m.get(k);
+    if (!cur || r.date > cur.date) m.set(k, { date: r.date, reporter: r.reporter, cat: r.cat });
+  }
+  return m;
+}
+function coverageRows() {
+  if (!stores.length) return [];
+  const last = lastVisitMap(); const today = todayKey();
+  const out = [];
+  for (const s of stores) {
+    if (covOpt.activeOnly && !s.active) continue;
+    const v = last.get(s.code);
+    const gap = v ? daysBetween(v.date, today) : null;
+    if (v && covOpt.days && gap < covOpt.days) continue;
+    out.push({ ...s, last: v ? v.date : '', by: v ? v.reporter : '', gap });
+  }
+  out.sort((a, b) => (a.gap === null ? -1 : b.gap === null ? 1 : b.gap - a.gap) || a.name.localeCompare(b.name, 'th'));
+  return out;
+}
+function newFollowRows() {
+  const byCode = new Map();
+  for (const r of recs) { if (!r.code || !r.date) continue; const k = r.code.toUpperCase(); if (!byCode.has(k)) byCode.set(k, []); byCode.get(k).push(r); }
+  const today = todayKey(); const out = [];
+  for (const r of recs) {
+    if (r.cat !== 'new' || !r.date) continue;
+    if (!r.code) { out.push({ ...r, gap: daysBetween(r.date, today), noCode: true }); continue; }
+    const after = (byCode.get(r.code.toUpperCase()) || []).some(x => x.cat === 'visit' && x.date > r.date);
+    if (!after) out.push({ ...r, gap: daysBetween(r.date, today), noCode: false });
+  }
+  out.sort((a, b) => b.gap - a.gap);
+  return out;
+}
+function unknownCodes() {
+  if (!stores.length) return [];
+  const bad = new Set();
+  for (const r of recs) if (r.code && !storeBy.has(r.code.toUpperCase())) bad.add(r.code);
+  return [...bad];
 }
 
 /* ---------- KPI ---------- */
@@ -433,6 +516,11 @@ function renderKpis() {
     ['ลูกค้าไม่ซ้ำ', fmtN(s.customers), 'นับจากรหัสลูกค้า', ''],
     ['รูปที่แนบ', fmtN(s.photos), 'ไฟล์', ''],
   ];
+  if (stores.length) {
+    const act = stores.filter(x => x.active); const seen = new Set();
+    for (const r of view) { const k = (r.code || '').toUpperCase(); const st = storeBy.get(k); if (st && st.active) seen.add(k); }
+    items.push(['ความครอบคลุมร้าน', act.length ? Math.round(100 * seen.size / act.length) + '%' : '–', `เยี่ยม ${fmtN(seen.size)} จาก ${fmtN(act.length)} ร้าน Active`, 'cov']);
+  }
   for (const [l, v, sub, cls] of items) box.append(el('div', { class: 'kpi ' + cls }, el('div', { class: 'mark' }), el('div', { class: 'l' }, l), el('div', { class: 'v' }, v), el('div', { class: 's' }, sub)));
   function pct(a, b) { return b ? (100 * a / b).toFixed(0) + '% ของรายงาน' : ''; }
 }
@@ -491,21 +579,71 @@ function renderDaily() {
 /* ---------- follow-up ---------- */
 const FCOLS = [['วันที่', r => fmtDate(r.date)], ['ผู้รายงาน', r => r.reporter], ['รหัสลูกค้า', r => r.code], ['ประเภท', r => r.type || CATS[r.cat].label], ['รายละเอียดการเข้าเยี่ยมลูกค้า', r => r.detail], ['หมายเหตุ', r => r.note], ['รายละเอียดการเปิด', r => r.open], ['รูป', r => r.photos]];
 function followRows() { return view.filter(r => r.note || r.open); }
+function fcell(r, h, f, i) {
+  if (h === 'ประเภท') return el('td', null, el('span', { class: 'cat ' + r.cat }, f(r)));
+  if (h === 'รหัสลูกค้า') return el('td', null, f(r) || '', r.store ? el('span', { class: 'store' }, r.store.name) : null);
+  return el('td', { class: i === 7 ? 'n' : (i >= 4 && i <= 6 ? 'wrap' : '') }, i === 7 ? (f(r) || '') : f(r));
+}
 function renderFollow() {
   const list = followRows(); const t = $('#tblFollow'); t.innerHTML = '';
   $('#followCnt').textContent = list.length ? list.length + ' รายการ' : '';
   if (!list.length) { t.append(el('tr', null, el('td', { class: 'empty', colspan: FCOLS.length }, 'ไม่มีรายการที่ต้องติดตามในช่วงที่เลือก'))); return; }
   t.append(el('thead', null, el('tr', null, FCOLS.map(([h], i) => el('th', { class: i === 7 ? 'n' : '' }, h)))));
-  t.append(el('tbody', null, list.map(r => el('tr', null, FCOLS.map(([h, f], i) => { const v = f(r); if (h === 'ประเภท') return el('td', null, el('span', { class: 'cat ' + r.cat }, v)); return el('td', { class: i === 7 ? 'n' : (i >= 4 && i <= 6 ? 'wrap' : '') }, i === 7 ? (v || '') : v); })))));
+  t.append(el('tbody', null, list.map(r => el('tr', null, FCOLS.map(([h, f], i) => fcell(r, h, f, i))))));
+}
+
+/* ---------- ร้านที่ไม่ได้เข้าเยี่ยม ---------- */
+const COV = [['รหัสร้าน', r => r.code], ['ชื่อร้าน', r => r.name], ['จังหวัด', r => r.province], ['สถานะ', r => r.status], ['เยี่ยมล่าสุด', r => r.last ? fmtDate(r.last) : 'ไม่เคย'], ['ไม่ได้ไป (วัน)', r => r.gap === null ? '' : r.gap], ['คนที่ไปล่าสุด', r => r.by]];
+function renderCoverage() {
+  const on = stores.length > 0; $('#cardCov').hidden = !on; if (!on) return;
+  const rows = coverageRows(); const t = $('#tblCov'); t.innerHTML = '';
+  const total = stores.filter(s => !covOpt.activeOnly || s.active).length;
+  $('#covCnt').textContent = `${rows.length} จาก ${total} ร้าน`;
+  const never = rows.filter(r => r.gap === null).length;
+  $('#covNote').textContent = `ร้านที่ไม่เคยมีใครรายงานว่าไปเยี่ยมเลย ${never} ร้าน · คำนวณจากรายงานทั้งหมด ไม่ขึ้นกับตัวกรองช่วงวันที่หรือผู้รายงานด้านบน`;
+  if (!rows.length) { t.append(el('tr', null, el('td', { class: 'empty' }, 'ทุกร้านถูกเข้าเยี่ยมภายในช่วงที่กำหนด'))); return; }
+  t.append(el('thead', null, el('tr', null, COV.map(([h], i) => el('th', { class: i === 5 ? 'n' : '' }, h)))));
+  t.append(el('tbody', null, rows.map(r => el('tr', null, COV.map(([h, f], i) => {
+    if (h === 'สถานะ') return el('td', null, el('span', { class: 'st ' + (r.active ? 'act' : 'inact') }, r.status));
+    if (h === 'เยี่ยมล่าสุด' && r.gap === null) return el('td', null, el('span', { class: 'st never' }, 'ไม่เคย'));
+    if (h === 'ไม่ได้ไป (วัน)') return el('td', { class: 'n' }, r.gap === null ? '–' : el('span', { class: 'st old' }, fmtN(r.gap)));
+    return el('td', { class: h === 'ชื่อร้าน' ? 'wrap' : '' }, f(r));
+  })))));
+}
+/* ---------- เปิดใหม่ที่ยังไม่ตามต่อ ---------- */
+const NEWC = [['วันที่เปิด', r => fmtDate(r.date)], ['ผู้รายงาน', r => r.reporter], ['รหัสลูกค้า', r => r.code], ['ชื่อร้าน', r => r.store ? r.store.name : ''], ['รายละเอียดการเปิด', r => r.open], ['ผ่านมา (วัน)', r => r.gap]];
+function renderNewFollow() {
+  const rows = newFollowRows(); const on = recs.length > 0; $('#cardNew').hidden = !on; if (!on) return;
+  const t = $('#tblNew'); t.innerHTML = '';
+  $('#newCnt').textContent = rows.length ? rows.length + ' ราย' : '';
+  if (!rows.length) { t.append(el('tr', null, el('td', { class: 'empty' }, 'ลูกค้าเปิดใหม่ทุกรายมีการเยี่ยมตามต่อแล้ว'))); return; }
+  t.append(el('thead', null, el('tr', null, NEWC.map(([h], i) => el('th', { class: i === 5 ? 'n' : '' }, h)))));
+  t.append(el('tbody', null, rows.map(r => el('tr', null, NEWC.map(([h, f], i) => {
+    if (h === 'รหัสลูกค้า' && r.noCode) return el('td', null, el('span', { class: 'st never' }, 'ไม่มีรหัส'));
+    if (h === 'ผ่านมา (วัน)') return el('td', { class: 'n' }, fmtN(r.gap));
+    return el('td', { class: (h === 'รายละเอียดการเปิด' || h === 'ชื่อร้าน') ? 'wrap' : '' }, f(r));
+  })))));
 }
 
 /* ---------- people ---------- */
-const PCOLS = [['name', 'ผู้รายงาน', false], ['reports', 'รายงาน', true], ['days', 'วันที่ทำงาน', true], ['customers', 'ลูกค้าไม่ซ้ำ', true], ['new', 'เปิดลูกค้าใหม่', true], ['visit', 'เยี่ยมลูกค้า', true], ['other', 'อื่นๆ', true], ['follow', 'ติดตาม', true], ['photos', 'รูป', true], ['last', 'รายงานล่าสุด', false]];
+const PCOLS = [['name', 'ผู้รายงาน', false], ['reports', 'รายงาน', true], ['days', 'วันที่ทำงาน', true], ['gap', 'ขาดส่ง (วัน)', true], ['codeok', 'รหัสครบ (%)', true], ['customers', 'ลูกค้าไม่ซ้ำ', true], ['new', 'เปิดลูกค้าใหม่', true], ['visit', 'เยี่ยมลูกค้า', true], ['other', 'อื่นๆ', true], ['follow', 'ติดตาม', true], ['photos', 'รูป', true], ['last', 'รายงานล่าสุด', false]];
+const PSKIP = ['name', 'last', 'gap', 'codeok'];
 function peopleRows() {
-  const names = [...new Set(view.map(r => r.reporter))];
-  const rows = names.map(n => { const mine = view.filter(r => r.reporter === n); const s = stats(mine); return { name: n, ...s, last: mine.reduce((a, r) => r.date > a ? r.date : a, '') }; });
-  const { k, dir } = peopleSort; rows.sort((a, b) => { const x = a[k], y = b[k]; const c = typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'th'); return dir === 'asc' ? c : -c; });
+  const names = [...new Set(view.map(r => r.reporter))]; const today = todayKey();
+  const rows = names.map(n => {
+    const mine = view.filter(r => r.reporter === n); const s = stats(mine);
+    const lastAll = recs.filter(r => r.reporter === n && r.date).reduce((a, r) => r.date > a ? r.date : a, '');
+    const ok = mine.filter(r => stores.length ? (r.code && storeBy.has(r.code.toUpperCase())) : !!r.code).length;
+    return { name: n, ...s, last: mine.reduce((a, r) => r.date > a ? r.date : a, ''), gap: lastAll ? daysBetween(lastAll, today) : null, codeok: mine.length ? Math.round(100 * ok / mine.length) : null };
+  });
+  const { k, dir } = peopleSort; rows.sort((a, b) => { const x = a[k] ?? -1, y = b[k] ?? -1; const c = typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'th'); return dir === 'asc' ? c : -c; });
   return rows;
+}
+function peopleCell(p, k, num) {
+  if (k === 'last') return fmtDate(p.last);
+  if (k === 'gap') return p.gap === null ? '–' : (p.gap >= 3 ? el('span', { class: 'st old' }, fmtN(p.gap)) : fmtN(p.gap));
+  if (k === 'codeok') return p.codeok === null ? '–' : (p.codeok < 100 ? el('span', { class: 'st old' }, p.codeok + '%') : p.codeok + '%');
+  return num ? fmtN(p[k]) : p[k];
 }
 function renderPeople() {
   const rows = peopleRows(); const t = $('#tblPeople'); t.innerHTML = '';
@@ -513,8 +651,8 @@ function renderPeople() {
   if (!rows.length) { t.append(el('tr', null, el('td', { class: 'empty', colspan: PCOLS.length }, 'ไม่มีข้อมูล'))); return; }
   t.append(el('thead', null, el('tr', null, PCOLS.map(([k, h, num]) => el('th', { class: 'sort' + (num ? ' n' : ''), 'data-dir': peopleSort.k === k ? peopleSort.dir : null, onclick: () => { peopleSort = { k, dir: peopleSort.k === k && peopleSort.dir === 'desc' ? 'asc' : 'desc' }; renderPeople(); } }, h)))));
   const tot = stats(view);
-  t.append(el('tbody', null, rows.map(p => el('tr', { class: 'row', onclick: () => openPerson(p.name) }, PCOLS.map(([k, , num]) => el('td', { class: num ? 'n' : '' }, k === 'last' ? fmtDate(p.last) : (num ? fmtN(p[k]) : p[k]))))),
-    el('tr', { class: 'total' }, PCOLS.map(([k, , num]) => el('td', { class: num ? 'n' : '' }, k === 'name' ? 'รวม' : k === 'last' ? '' : fmtN(tot[k]))))));
+  t.append(el('tbody', null, rows.map(p => el('tr', { class: 'row', onclick: () => openPerson(p.name) }, PCOLS.map(([k, , num]) => el('td', { class: num ? 'n' : '' }, peopleCell(p, k, num))))),
+    el('tr', { class: 'total' }, PCOLS.map(([k, , num]) => el('td', { class: num ? 'n' : '' }, k === 'name' ? 'รวม' : PSKIP.includes(k) ? '' : fmtN(tot[k]))))));
 }
 function peopleTsv() { const rows = peopleRows(); return tsv([PCOLS.map(c => c[1]), ...rows.map(p => PCOLS.map(([k]) => k === 'last' ? fmtDate(p.last) : p[k]))]); }
 function followTsv() { return tsv([FCOLS.map(c => c[0]), ...followRows().map(r => FCOLS.map(([, f]) => f(r)))]); }
@@ -527,7 +665,7 @@ function openPerson(name) {
   $('#mStats').innerHTML = ''; for (const [l, v] of [['รายงาน', s.reports], ['วันที่ทำงาน', s.days], ['ลูกค้าไม่ซ้ำ', s.customers], ['เปิดลูกค้าใหม่', s.new], ['เยี่ยมลูกค้า', s.visit], ['อื่นๆ', s.other], ['ติดตาม', s.follow], ['รูป', s.photos]]) $('#mStats').append(el('span', null, l + ' ', el('b', null, fmtN(v))));
   const t = $('#mTable'); t.innerHTML = '';
   t.append(el('thead', null, el('tr', null, FCOLS.map(([h], i) => el('th', { class: i === 7 ? 'n' : '' }, h)))));
-  t.append(el('tbody', null, mine.map(r => el('tr', null, FCOLS.map(([h, f], i) => h === 'ประเภท' ? el('td', null, el('span', { class: 'cat ' + r.cat }, f(r))) : el('td', { class: i === 7 ? 'n' : (i >= 4 && i <= 6 ? 'wrap' : '') }, i === 7 ? (f(r) || '') : f(r)))))));
+  t.append(el('tbody', null, mine.map(r => el('tr', null, FCOLS.map(([h, f], i) => fcell(r, h, f, i))))));
   $('#modal').hidden = false;
 }
 $('#mClose').onclick = () => { $('#modal').hidden = true; };
@@ -592,6 +730,10 @@ async function connectBase() {
     try { const saved = JSON.parse(localStorage.getItem('accdash.base') || '{}'); if (saved.tableId && tables.some(t => t.id === saved.tableId)) { base.tableId = saved.tableId; base.viewId = saved.viewId || ''; } } catch { }
     try { const th = await bitable.bridge.getTheme(); if (th) document.documentElement.dataset.theme = String(th).toLowerCase() === 'dark' ? 'dark' : 'light'; } catch { }
     const st = $('#selTable'); st.innerHTML = ''; tables.forEach(t => st.append(el('option', { value: t.id }, t.name))); st.value = base.tableId;
+    const ss = $('#selStore'); ss.innerHTML = ''; ss.append(el('option', { value: '' }, 'ไม่ใช้'), ...tables.map(t => el('option', { value: t.id }, t.name)));
+    try { const saved = JSON.parse(localStorage.getItem('accdash.base') || '{}'); if (saved.storeTableId && tables.some(t => t.id === saved.storeTableId)) base.storeTableId = saved.storeTableId; } catch { }
+    if (!base.storeTableId) base.storeTableId = await detectStoreTable(tables);
+    ss.value = base.storeTableId || '';
     $('#setup').hidden = false; $('#btnRefresh').hidden = false;
     await loadViews(); await loadBase();
   } catch (err) { setStatus('err', 'เชื่อมต่อไม่ได้'); showAlert('<b>เชื่อมต่อ Base ไม่สำเร็จ:</b> ' + (err.message || err) + '<br>ยังใช้ "อัปโหลดไฟล์ Export" ได้ตามปกติ'); }
@@ -601,9 +743,55 @@ async function loadViews() {
   try { const t = await base.bitable.base.getTableById(base.tableId); const views = await t.getViewMetaList(); views.forEach(v => sv.append(el('option', { value: v.id }, v.name))); } catch { }
   sv.value = base.viewId; if (sv.value !== base.viewId) base.viewId = '';
 }
+/* หาตารางรายชื่อร้านเอง: ต้องมีคอลัมน์รหัส + ชื่อร้าน และไม่ใช่ตารางรายงาน */
+const S_CODE = ['รหัสลูกค้า', 'รหัสร้าน', 'รหัสสาขา', 'code', 'branch'];
+const S_NAME = ['ชื่อร้าน', 'ชื่อสาขา', 'name branch', 'name'];
+const S_PROV = ['จังหวัด', 'province'];
+const S_STAT = ['สถานะ', 'status'];
+function pickField(fields, cands) {
+  const nf = fields.map(f => ({ f, n: norm(f.name) }));
+  for (const c of cands) { const hit = nf.find(x => x.n === norm(c)); if (hit) return hit.f.name; }
+  for (const c of cands) { const hit = nf.find(x => x.n.includes(norm(c))); if (hit) return hit.f.name; }
+  return '';
+}
+async function detectStoreTable(tables) {
+  for (const meta of tables) {
+    if (meta.id === base.tableId) continue;
+    try {
+      const t = await base.bitable.base.getTableById(meta.id);
+      const fields = await t.getFieldMetaList();
+      if (pickField(fields, S_CODE) && pickField(fields, S_NAME)) return meta.id;
+    } catch { }
+  }
+  return '';
+}
+async function loadStores() {
+  stores = []; storeBy = new Map();
+  if (!base || !base.storeTableId) return;
+  try {
+    const t = await base.bitable.base.getTableById(base.storeTableId);
+    const fields = await t.getFieldMetaList();
+    const fc = pickField(fields, S_CODE), fn = pickField(fields, S_NAME), fp = pickField(fields, S_PROV), fs = pickField(fields, S_STAT);
+    if (!fc) throw new Error('ตารางรายชื่อร้านไม่มีคอลัมน์รหัส');
+    let pageToken, guard = 0;
+    do {
+      const p = { pageSize: PAGE_SIZE }; if (pageToken) p.pageToken = pageToken;
+      const res = await withTimeout(t.getRecords(p), 30000, 'อ่านรายชื่อร้านหมดเวลา');
+      for (const rec of res.records || []) {
+        const g = (name) => { if (!name) return ''; const f = fields.find(x => x.name === name); const v = f && rec.fields ? rec.fields[f.id] : null; return str(convert(v, f ? f.type : 0)); };
+        const code = g(fc).toUpperCase(); if (!code) continue;
+        const status = g(fs);
+        const s = { code, name: g(fn) || code, province: g(fp), status: status || '-', active: !/inactive|ปิด|ไม่ใช้งาน/i.test(status) };
+        stores.push(s); storeBy.set(code, s);
+      }
+      pageToken = res.hasMore ? res.pageToken : null;
+    } while (pageToken && ++guard < 200);
+  } catch (err) { showAlert('<b>อ่านตารางรายชื่อร้านไม่สำเร็จ:</b> ' + (err.message || err) + '<br>ส่วนอื่นยังใช้งานได้ตามปกติ', 'info'); }
+}
 async function loadBase() {
   const btn = $('#btnRefresh'); btn.disabled = true; setStatus('', 'กำลังอ่านข้อมูล…');
   try {
+    await loadStores();
     const t = await base.bitable.base.getTableById(base.tableId);
     const name = await t.getName(); const fields = await t.getFieldMetaList();
     const rows = []; let pageToken, total = 0, guard = 0;
@@ -615,7 +803,7 @@ async function loadBase() {
       pageToken = res.hasMore ? res.pageToken : null;
     } while (pageToken && ++guard < 200);
     const types = {}; fields.forEach(f => types[f.name] = f.type);
-    setStatus('live', 'สดจาก Feishu Base'); $('#setupInfo').textContent = `${rows.length} เรคคอร์ด`;
+    setStatus('live', 'สดจาก Feishu Base'); $('#setupInfo').textContent = `${rows.length} เรคคอร์ด` + (stores.length ? ` · รายชื่อร้าน ${stores.length} ร้าน` : '');
     setSource({ kind: 'base', label: `Base · ตาราง "${name}"` + (base.viewId ? ' · ' + $('#selView').selectedOptions[0].textContent : ''), headers: fields.map(f => f.name), rows, types });
   } catch (err) { setStatus('err', 'อ่านข้อมูลไม่ได้'); showAlert('<b>อ่านข้อมูลจาก Base ไม่สำเร็จ:</b> ' + (err.message || err)); }
   btn.disabled = false;
@@ -629,12 +817,18 @@ function convert(v, type) {
   return toText(v);
 }
 $('#btnRefresh').onclick = () => loadBase();
-$('#selTable').onchange = async (e) => { base.tableId = e.target.value; base.viewId = ''; try { localStorage.setItem('accdash.base', JSON.stringify({ tableId: base.tableId, viewId: '' })); } catch { } await loadViews(); await loadBase(); };
-$('#selView').onchange = async (e) => { base.viewId = e.target.value; try { localStorage.setItem('accdash.base', JSON.stringify({ tableId: base.tableId, viewId: base.viewId })); } catch { } await loadBase(); };
+$('#selTable').onchange = async (e) => { base.tableId = e.target.value; base.viewId = ''; saveBasePrefs(); await loadViews(); await loadBase(); };
+$('#selView').onchange = async (e) => { base.viewId = e.target.value; saveBasePrefs(); await loadBase(); };
+$('#selStore').onchange = async (e) => { base.storeTableId = e.target.value; saveBasePrefs(); await loadBase(); };
+function saveBasePrefs() { try { localStorage.setItem('accdash.base', JSON.stringify({ tableId: base.tableId, viewId: base.viewId, storeTableId: base.storeTableId || '' })); } catch { } }
+$('#covDays').onchange = (e) => { covOpt.days = +e.target.value; renderCoverage(); };
+$('#covActive').onchange = (e) => { covOpt.activeOnly = e.target.checked; renderCoverage(); };
+$('#btnCopyCov').onclick = () => copyText(tsv([COV.map(c => c[0]), ...coverageRows().map(r => COV.map(([, f]) => f(r)))]));
+$('#btnCopyNew').onclick = () => copyText(tsv([NEWC.map(c => c[0]), ...newFollowRows().map(r => NEWC.map(([, f]) => f(r)))]));
 
 /* ---------- start ---------- */
 window.addEventListener('resize', () => { clearTimeout(window.__rz); window.__rz = setTimeout(renderCharts, 150); });
-window.__dash = { get recs() { return recs; }, get view() { return view; }, get mapping() { return mapping; }, get source() { return source; }, stats, peopleRows, followRows, parseDateKey, classify, autoMap };
+window.__dash = { get recs() { return recs; }, get view() { return view; }, get mapping() { return mapping; }, get source() { return source; }, get stores() { return stores; }, get covOpt() { return covOpt; }, stats, peopleRows, followRows, coverageRows, newFollowRows, unknownCodes, lastVisitMap, daysBetween, parseDateKey, classify, autoMap };
 render();
 connectBase();
 </script>
